@@ -1,11 +1,10 @@
 import { cloneDeep, extend, get, groupBy, has, isString, map as _map, omit, pick, reduce } from 'lodash';
-import { lastValueFrom, Observable, of, throwError } from 'rxjs';
+import { lastValueFrom, merge, Observable, of, throwError } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
 import { v4 as uuidv4 } from 'uuid';
 
 import {
   AnnotationEvent,
-  AnnotationQueryRequest,
   ArrayVector,
   DataFrame,
   DataQueryError,
@@ -22,6 +21,7 @@ import {
   TIME_SERIES_TIME_FIELD_NAME,
   TIME_SERIES_VALUE_FIELD_NAME,
   TimeSeries,
+  toDataFrame,
 } from '@grafana/data';
 import {
   BackendDataSourceResponse,
@@ -33,9 +33,11 @@ import {
 import config from 'app/core/config';
 import { getTemplateSrv, TemplateSrv } from 'app/features/templating/template_srv';
 
+import { AnnotationEditor } from './components/AnnotationEditor';
 import { FluxQueryEditor } from './components/FluxQueryEditor';
 import InfluxQueryModel from './influx_query_model';
 import InfluxSeries from './influx_series';
+import { prepareAnnotation } from './migrations';
 import { buildRawQuery } from './queryUtils';
 import { InfluxQueryBuilder } from './query_builder';
 import ResponseParser from './response_parser';
@@ -156,6 +158,11 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
       this.annotations = {
         QueryEditor: FluxQueryEditor,
       };
+    } else {
+      this.annotations = {
+        QueryEditor: AnnotationEditor,
+        prepareAnnotation,
+      };
     }
   }
 
@@ -255,6 +262,32 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
    * The unchanged pre 7.1 query implementation
    */
   classicQuery(options: any): Observable<DataQueryResponse> {
+    // migrate annotations
+    if (options.targets.some((target: InfluxQuery) => target.fromAnnotations)) {
+      const streams: Array<Observable<DataQueryResponse>> = [];
+
+      for (const target of options.targets) {
+        if (target.hide) {
+          continue;
+        } else {
+          streams.push(
+            new Observable((subscriber) => {
+              this.annotationEvents(options, target)
+                .then((events) => {
+                  return subscriber.next({ data: [toDataFrame(events)] });
+                })
+                .catch((ex) => {
+                  return subscriber.error(new Error(ex));
+                })
+                .finally(() => subscriber.complete());
+            })
+          );
+        }
+      }
+
+      return merge(...streams);
+    }
+
     let timeFilter = this.getTimeFilter(options);
     const scopedVars = options.scopedVars;
     const targets = cloneDeep(options.targets);
@@ -349,7 +382,7 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
     );
   }
 
-  async annotationQuery(options: AnnotationQueryRequest<any>): Promise<AnnotationEvent[]> {
+  async annotationEvents(options: any, annotation: InfluxQuery): Promise<AnnotationEvent[]> {
     if (this.isFlux) {
       return Promise.reject({
         message: 'Flux requires the standard annotation query',
@@ -357,7 +390,7 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
     }
 
     // InfluxQL puts a query string on the annotation
-    if (!options.annotation.query) {
+    if (!annotation.query) {
       return Promise.reject({
         message: 'Query missing in annotation definition',
       });
@@ -368,7 +401,7 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
       const target: InfluxQuery = {
         refId: 'metricFindQuery',
         datasource: this.getRef(),
-        query: this.templateSrv.replace(options.annotation.query ?? '', undefined, 'regex'),
+        query: this.templateSrv.replace(annotation.query ?? '', undefined, 'regex'),
         rawQuery: true,
       };
 
@@ -382,19 +415,19 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
               to: options.range.to.valueOf().toString(),
               queries: [target],
             },
-            requestId: options.annotation.name,
+            requestId: annotation.name,
           })
           .pipe(
             map(
               async (res: FetchResponse<BackendDataSourceResponse>) =>
-                await this.responseParser.transformAnnotationResponse(options, res, target)
+                await this.responseParser.transformAnnotationResponse(annotation, res, target)
             )
           )
       );
     }
 
-    const timeFilter = this.getTimeFilter({ rangeRaw: options.rangeRaw, timezone: options.dashboard.timezone });
-    let query = options.annotation.query.replace('$timeFilter', timeFilter);
+    const timeFilter = this.getTimeFilter({ rangeRaw: options.range.raw, timezone: options.timezone });
+    let query = annotation.query.replace('$timeFilter', timeFilter);
     query = this.templateSrv.replace(query, undefined, 'regex');
 
     return lastValueFrom(this._seriesQuery(query, options)).then((data: any) => {
@@ -403,7 +436,7 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
       }
       return new InfluxSeries({
         series: data.results[0].series,
-        annotation: options.annotation,
+        annotation: annotation,
       }).getAnnotations();
     });
   }
