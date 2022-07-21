@@ -2,12 +2,14 @@ package playlistimpl
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/grafana/grafana/pkg/models"
 	"github.com/grafana/grafana/pkg/services/playlist"
 	"github.com/grafana/grafana/pkg/services/sqlstore"
 	"github.com/grafana/grafana/pkg/services/sqlstore/db"
 	"github.com/grafana/grafana/pkg/util"
+	"github.com/jmoiron/sqlx"
 )
 
 type store interface {
@@ -20,11 +22,13 @@ type store interface {
 }
 
 type sqlStore struct {
-	db db.DB
+	db     db.DB
+	sqlxdb *sqlx.DB
 }
 
 func (s *sqlStore) Insert(ctx context.Context, cmd *playlist.CreatePlaylistCommand) (*playlist.Playlist, error) {
 	p := playlist.Playlist{}
+	// here we are actually doing transaction db session, since there is one session for update 2 tables
 	err := s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
 		uid, err := generateAndValidateNewPlaylistUid(sess, cmd.OrgId)
 		if err != nil {
@@ -58,6 +62,7 @@ func (s *sqlStore) Insert(ctx context.Context, cmd *playlist.CreatePlaylistComma
 
 		return err
 	})
+
 	return &p, err
 }
 
@@ -79,7 +84,6 @@ func (s *sqlStore) Update(ctx context.Context, cmd *playlist.UpdatePlaylistComma
 		p.Id = existingPlaylist.Id
 
 		dto = playlist.PlaylistDTO{
-
 			Id:       p.Id,
 			UID:      p.UID,
 			OrgId:    p.OrgId,
@@ -123,15 +127,27 @@ func (s *sqlStore) Get(ctx context.Context, query *playlist.GetPlaylistByUidQuer
 	}
 
 	p := playlist.Playlist{}
-	err := s.db.WithDbSession(ctx, func(sess *sqlstore.DBSession) error {
-		p = playlist.Playlist{UID: query.UID, OrgId: query.OrgId}
-		exists, err := sess.Get(&p)
-		if !exists {
-			return playlist.ErrPlaylistNotFound
-		}
 
-		return err
-	})
+	var err error
+	if s.sqlxdb == nil {
+		err = s.db.WithDbSession(ctx, func(sess *sqlstore.DBSession) error {
+			p = playlist.Playlist{UID: query.UID, OrgId: query.OrgId}
+			exists, err := sess.Get(&p)
+			if !exists {
+				return playlist.ErrPlaylistNotFound
+			}
+
+			return err
+		})
+	} else {
+		err = s.sqlxdb.GetContext(ctx, &p, s.sqlxdb.Rebind("SELECT * FROM playlist WHERE uid=? AND org_id=?"), query.UID, query.OrgId)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return nil, playlist.ErrPlaylistNotFound
+			}
+			return nil, err
+		}
+	}
 	return &p, err
 }
 
@@ -140,24 +156,53 @@ func (s *sqlStore) Delete(ctx context.Context, cmd *playlist.DeletePlaylistComma
 		return playlist.ErrCommandValidationFailed
 	}
 
-	return s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
-		playlist := playlist.Playlist{UID: cmd.UID, OrgId: cmd.OrgId}
-		_, err := sess.Get(&playlist)
+	var err error
+	if s.sqlxdb == nil {
+		err = s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
+			playlist := playlist.Playlist{UID: cmd.UID, OrgId: cmd.OrgId}
+			_, err := sess.Get(&playlist)
+			if err != nil {
+				return err
+			}
+
+			var rawPlaylistSQL = "DELETE FROM playlist WHERE uid = ? and org_id = ?"
+			_, err = sess.Exec(rawPlaylistSQL, cmd.UID, cmd.OrgId)
+			if err != nil {
+				return err
+			}
+
+			var rawItemSQL = "DELETE FROM playlist_item WHERE playlist_id = ?"
+			_, err = sess.Exec(rawItemSQL, playlist.Id)
+
+			return err
+		})
+	} else {
+		tx, err := s.sqlxdb.Begin()
 		if err != nil {
 			return err
 		}
+		defer tx.Rollback()
 
-		var rawPlaylistSQL = "DELETE FROM playlist WHERE uid = ? and org_id = ?"
-		_, err = sess.Exec(rawPlaylistSQL, cmd.UID, cmd.OrgId)
-		if err != nil {
+		p := playlist.Playlist{}
+		if err = s.sqlxdb.GetContext(ctx, &p, s.sqlxdb.Rebind("SELECT * FROM playlist WHERE uid=? AND org_id=?"), cmd.UID, cmd.OrgId); err != nil {
 			return err
 		}
 
-		var rawItemSQL = "DELETE FROM playlist_item WHERE playlist_id = ?"
-		_, err = sess.Exec(rawItemSQL, playlist.Id)
+		if _, err = tx.ExecContext(ctx, s.sqlxdb.Rebind("DELETE FROM playlist WHERE uid = ? and org_id = ?"), cmd.UID, cmd.OrgId); err != nil {
+			return err
+		}
 
-		return err
-	})
+		if err == nil {
+			if _, err = tx.ExecContext(ctx, s.sqlxdb.Rebind("DELETE FROM playlist_item WHERE playlist_id = ?"), p.Id); err != nil {
+				return err
+			}
+		}
+
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return err
 }
 
 func (s *sqlStore) List(ctx context.Context, query *playlist.GetPlaylistsQuery) (playlist.Playlists, error) {
@@ -166,39 +211,58 @@ func (s *sqlStore) List(ctx context.Context, query *playlist.GetPlaylistsQuery) 
 		return playlists, playlist.ErrCommandValidationFailed
 	}
 
-	err := s.db.WithDbSession(ctx, func(dbSess *sqlstore.DBSession) error {
-		sess := dbSess.Limit(query.Limit)
+	var err error
+	if s.sqlxdb == nil {
+		err = s.db.WithDbSession(ctx, func(dbSess *sqlstore.DBSession) error {
+			sess := dbSess.Limit(query.Limit)
 
-		if query.Name != "" {
-			sess.Where("name LIKE ?", "%"+query.Name+"%")
+			if query.Name != "" {
+				sess.Where("name LIKE ?", "%"+query.Name+"%")
+			}
+
+			sess.Where("org_id = ?", query.OrgId)
+			err := sess.Find(&playlists)
+
+			return err
+		})
+	} else {
+		if query.Name == "" {
+			err = s.sqlxdb.SelectContext(
+				ctx, &playlists, s.sqlxdb.Rebind("SELECT * FROM playlist WHERE org_id = ? LIMIT ?"), query.OrgId, query.Limit)
+		} else {
+			err = s.sqlxdb.SelectContext(
+				ctx, &playlists, s.sqlxdb.Rebind("SELECT * FROM playlist WHERE org_id = ? AND name LIKE ? LIMIT ?"), query.OrgId, "%"+query.Name+"%", query.Limit)
 		}
-
-		sess.Where("org_id = ?", query.OrgId)
-		err := sess.Find(&playlists)
-
-		return err
-	})
+	}
 	return playlists, err
 }
 
 func (s *sqlStore) GetItems(ctx context.Context, query *playlist.GetPlaylistItemsByUidQuery) ([]playlist.PlaylistItem, error) {
 	var playlistItems = make([]playlist.PlaylistItem, 0)
-	err := s.db.WithDbSession(ctx, func(sess *sqlstore.DBSession) error {
-		if query.PlaylistUID == "" || query.OrgId == 0 {
-			return models.ErrCommandValidationFailed
-		}
+	if query.PlaylistUID == "" || query.OrgId == 0 {
+		return playlistItems, models.ErrCommandValidationFailed
+	}
 
-		// getQuery the playlist Id
-		getQuery := &playlist.GetPlaylistByUidQuery{UID: query.PlaylistUID, OrgId: query.OrgId}
-		p, err := s.Get(ctx, getQuery)
-		if err != nil {
+	var err error
+	if s.sqlxdb == nil {
+		err = s.db.WithDbSession(ctx, func(sess *sqlstore.DBSession) error {
+			// getQuery the playlist Id
+			getQuery := &playlist.GetPlaylistByUidQuery{UID: query.PlaylistUID, OrgId: query.OrgId}
+			p, err := s.Get(ctx, getQuery)
+			if err != nil {
+				return err
+			}
+			err = sess.Where("playlist_id=?", p.Id).Find(&playlistItems)
 			return err
+		})
+	} else {
+		var p = playlist.Playlist{}
+		err = s.sqlxdb.GetContext(ctx, &p, s.sqlxdb.Rebind("SELECT * FROM playlist WHERE uid=? AND org_id=?"), query.PlaylistUID, query.OrgId)
+		if err != nil {
+			return playlistItems, err
 		}
-
-		err = sess.Where("playlist_id=?", p.Id).Find(&playlistItems)
-
-		return err
-	})
+		err = s.sqlxdb.SelectContext(ctx, &playlistItems, s.sqlxdb.Rebind("SELECT * FROM playlist_item WHERE playlist_id=?"), p.Id)
+	}
 	return playlistItems, err
 }
 
