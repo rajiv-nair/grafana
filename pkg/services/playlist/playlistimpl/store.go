@@ -29,12 +29,46 @@ type sqlStore struct {
 func (s *sqlStore) Insert(ctx context.Context, cmd *playlist.CreatePlaylistCommand) (*playlist.Playlist, error) {
 	p := playlist.Playlist{}
 	// here we are actually doing transaction db session, since there is one session for update 2 tables
-	err := s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
-		uid, err := generateAndValidateNewPlaylistUid(sess, cmd.OrgId)
-		if err != nil {
-			return err
-		}
+	var err error
+	if s.sqlxdb == nil {
+		err = s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
+			uid, err := generateAndValidateNewPlaylistUid(sess, cmd.OrgId)
+			if err != nil {
+				return err
+			}
 
+			p = playlist.Playlist{
+				Name:     cmd.Name,
+				Interval: cmd.Interval,
+				OrgId:    cmd.OrgId,
+				UID:      uid,
+			}
+
+			_, err = sess.Insert(&p)
+			if err != nil {
+				return err
+			}
+
+			playlistItems := make([]playlist.PlaylistItem, 0)
+			for _, item := range cmd.Items {
+				playlistItems = append(playlistItems, playlist.PlaylistItem{
+					PlaylistId: p.Id,
+					Type:       item.Type,
+					Value:      item.Value,
+					Order:      item.Order,
+					Title:      item.Title,
+				})
+			}
+
+			_, err = sess.Insert(&playlistItems)
+
+			return err
+		})
+	} else {
+		uid, err := newGenerateAndValidateNewPlaylistUid(ctx, s.sqlxdb, cmd.OrgId)
+		if err != nil {
+			return nil, err
+		}
 		p = playlist.Playlist{
 			Name:     cmd.Name,
 			Interval: cmd.Interval,
@@ -42,9 +76,14 @@ func (s *sqlStore) Insert(ctx context.Context, cmd *playlist.CreatePlaylistComma
 			UID:      uid,
 		}
 
-		_, err = sess.Insert(&p)
+		tx, err := s.sqlxdb.Beginx()
 		if err != nil {
-			return err
+			return nil, err
+		}
+		defer tx.Rollback()
+
+		if _, err = tx.NamedExecContext(ctx, s.sqlxdb.Rebind("INSERT INTO playlist (name, interval, org_id, uid) VALUES (:name, :interval, :org_id, :uid)"), &p); err != nil {
+			return nil, err
 		}
 
 		playlistItems := make([]playlist.PlaylistItem, 0)
@@ -57,11 +96,16 @@ func (s *sqlStore) Insert(ctx context.Context, cmd *playlist.CreatePlaylistComma
 				Title:      item.Title,
 			})
 		}
+		_, err = tx.NamedExecContext(ctx, s.sqlxdb.Rebind(`INSERT INTO playlist_item (playlist_id, type, value, title, order)
+        VALUES (:playlist_id, :type, :value, :title, :order)`), playlistItems)
+		if err != nil {
+			return nil, err
+		}
 
-		_, err = sess.Insert(&playlistItems)
-
-		return err
-	})
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
 
 	return &p, err
 }
@@ -136,7 +180,6 @@ func (s *sqlStore) Get(ctx context.Context, query *playlist.GetPlaylistByUidQuer
 			if !exists {
 				return playlist.ErrPlaylistNotFound
 			}
-
 			return err
 		})
 	} else {
@@ -177,7 +220,7 @@ func (s *sqlStore) Delete(ctx context.Context, cmd *playlist.DeletePlaylistComma
 			return err
 		})
 	} else {
-		tx, err := s.sqlxdb.Begin()
+		tx, err := s.sqlxdb.Beginx()
 		if err != nil {
 			return err
 		}
@@ -192,10 +235,8 @@ func (s *sqlStore) Delete(ctx context.Context, cmd *playlist.DeletePlaylistComma
 			return err
 		}
 
-		if err == nil {
-			if _, err = tx.ExecContext(ctx, s.sqlxdb.Rebind("DELETE FROM playlist_item WHERE playlist_id = ?"), p.Id); err != nil {
-				return err
-			}
+		if _, err = tx.ExecContext(ctx, s.sqlxdb.Rebind("DELETE FROM playlist_item WHERE playlist_id = ?"), p.Id); err != nil {
+			return err
 		}
 
 		if err = tx.Commit(); err != nil {
@@ -281,6 +322,22 @@ func generateAndValidateNewPlaylistUid(sess *sqlstore.DBSession, orgId int64) (s
 
 		if !exists {
 			return uid, nil
+		}
+	}
+
+	return "", models.ErrPlaylistFailedGenerateUniqueUid
+}
+
+func newGenerateAndValidateNewPlaylistUid(ctx context.Context, db *sqlx.DB, orgId int64) (string, error) {
+	for i := 0; i < 3; i++ {
+		uid := generateNewUid()
+		p := models.Playlist{}
+		err := db.GetContext(ctx, &p, db.Rebind("SELECT * FROM playlist WHERE uid=? AND org_id=?"), uid, orgId)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return uid, nil
+			}
+			return "", err
 		}
 	}
 
