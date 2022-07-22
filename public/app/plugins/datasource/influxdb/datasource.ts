@@ -267,22 +267,14 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
       const streams: Array<Observable<DataQueryResponse>> = [];
 
       for (const target of options.targets) {
-        if (target.hide) {
-          continue;
-        } else {
-          streams.push(
-            new Observable((subscriber) => {
-              this.annotationEvents(options, target)
-                .then((events) => {
-                  return subscriber.next({ data: [toDataFrame(events)] });
-                })
-                .catch((ex) => {
-                  return subscriber.error(new Error(ex));
-                })
-                .finally(() => subscriber.complete());
-            })
-          );
-        }
+        streams.push(
+          new Observable((subscriber) => {
+            this.annotationEvents(options, target)
+              .then((events) => subscriber.next({ data: [toDataFrame(events)] }))
+              .catch((ex) => subscriber.error(new Error(ex)))
+              .finally(() => subscriber.complete());
+          })
+        );
       }
 
       return merge(...streams);
@@ -382,7 +374,7 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
     );
   }
 
-  async annotationEvents(options: any, annotation: InfluxQuery): Promise<AnnotationEvent[]> {
+  async annotationEvents(options: DataQueryRequest, annotation: InfluxQuery): Promise<AnnotationEvent[]> {
     if (this.isFlux) {
       return Promise.reject({
         message: 'Flux requires the standard annotation query',
@@ -401,7 +393,7 @@ export default class InfluxDatasource extends DataSourceWithBackend<InfluxQuery,
       const target: InfluxQuery = {
         refId: 'metricFindQuery',
         datasource: this.getRef(),
-        query: this.templateSrv.replace(annotation.query ?? '', undefined, 'regex'),
+        query: this.templateSrv.replace(annotation.query, undefined, 'regex'),
         rawQuery: true,
       };
 
