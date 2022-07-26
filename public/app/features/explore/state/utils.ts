@@ -34,6 +34,21 @@ const loadGraphStyle = (): ExploreGraphStyle => {
   return toGraphStyle(data);
 };
 
+const LOGS_VOLUME_ENABLED_KEY = 'grafana.explore.logs_volume.enabled';
+export const storeLogsVolumeEnabled = (enabled: boolean): void => {
+  store.set(LOGS_VOLUME_ENABLED_KEY, Number(enabled).toString());
+};
+
+const loadLogsVolumeEnabled = (): boolean => {
+  const data = store.get(LOGS_VOLUME_ENABLED_KEY);
+  // we default to `enabled=true`
+  if (data === '0') {
+    return false;
+  } else {
+    return true;
+  }
+};
+
 /**
  * Returns a fresh Explore area state
  */
@@ -65,6 +80,7 @@ export const makeExplorePaneState = (): ExploreItemState => ({
   eventBridge: null as unknown as EventBusExtended,
   cache: [],
   richHistory: [],
+  logsVolumeEnabled: loadLogsVolumeEnabled(),
   logsVolumeDataProvider: undefined,
   logsVolumeData: undefined,
   graphStyle: loadGraphStyle(),

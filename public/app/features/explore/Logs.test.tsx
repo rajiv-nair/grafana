@@ -18,6 +18,8 @@ describe('Logs', () => {
       <Logs
         exploreId={ExploreId.left}
         splitOpen={() => undefined}
+        logsVolumeEnabled={true}
+        switchLogsVolume={() => null}
         logsVolumeData={undefined}
         loadLogsVolumeData={() => undefined}
         logRows={rows}
