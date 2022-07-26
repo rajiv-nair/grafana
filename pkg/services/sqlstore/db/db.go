@@ -12,5 +12,5 @@ type DB interface {
 	WithTransactionalDbSession(ctx context.Context, callback sqlstore.DBTransactionFunc) error
 	WithDbSession(ctx context.Context, callback sqlstore.DBTransactionFunc) error
 	GetDialect() migrator.Dialect
-	GetDB() core.DB
+	GetDB() *core.DB
 }

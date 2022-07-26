@@ -17,11 +17,15 @@ func ProvideService(db db.DB, cfg *setting.Cfg) playlist.Service {
 	var newDb *sqlx.DB
 	if cfg.IsFeatureToggleEnabled("NewDBLibrary") {
 		newDb = sqlx.NewDb(db.GetDB().DB, db.GetDialect().DriverName())
+		return &Service{
+			store: &sqlxStore{
+				sqlxdb: newDb,
+			},
+		}
 	}
 	return &Service{
 		store: &sqlStore{
-			db:     db,
-			sqlxdb: newDb,
+			db: db,
 		},
 	}
 }
