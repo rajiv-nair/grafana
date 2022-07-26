@@ -14,12 +14,10 @@ type Service struct {
 }
 
 func ProvideService(db db.DB, cfg *setting.Cfg) playlist.Service {
-	var newDb *sqlx.DB
 	if cfg.IsFeatureToggleEnabled("NewDBLibrary") {
-		newDb = sqlx.NewDb(db.GetDB().DB, db.GetDialect().DriverName())
 		return &Service{
 			store: &sqlxStore{
-				sqlxdb: newDb,
+				sqlxdb: sqlx.NewDb(db.GetDB().DB, db.GetDialect().DriverName()),
 			},
 		}
 	}

@@ -62,22 +62,37 @@ func (s *sqlxStore) Insert(ctx context.Context, cmd *playlist.CreatePlaylistComm
 
 func (s *sqlxStore) Update(ctx context.Context, cmd *playlist.UpdatePlaylistCommand) (*playlist.PlaylistDTO, error) {
 	dto := playlist.PlaylistDTO{}
-	var err error
+
+	// Get the id of playlist to be updated with orgId and UID
+	existingPlaylist, err := s.Get(ctx, &playlist.GetPlaylistByUidQuery{UID: cmd.UID, OrgId: cmd.OrgId})
+	if err != nil {
+		return nil, err
+	}
+
+	// Create object to be update to
+	p := playlist.Playlist{
+		Id:       existingPlaylist.Id,
+		UID:      cmd.UID,
+		OrgId:    cmd.OrgId,
+		Name:     cmd.Name,
+		Interval: cmd.Interval,
+	}
+
+	tx, err := s.sqlxdb.Beginx()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.NamedExecContext(ctx, s.sqlxdb.Rebind(`UPDATE playlist (playlist_id, type, value, title, order)
+	VALUES (:playlist_id, :type, :value, :title, :order)`), p)
+
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+
 	// To be implemented
 	// err := s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
-	// 	p := playlist.Playlist{
-	// 		UID:      cmd.UID,
-	// 		OrgId:    cmd.OrgId,
-	// 		Name:     cmd.Name,
-	// 		Interval: cmd.Interval,
-	// 	}
-
-	// 	existingPlaylist := playlist.Playlist{UID: cmd.UID, OrgId: cmd.OrgId}
-	// 	_, err := sess.Get(&existingPlaylist)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	p.Id = existingPlaylist.Id
 
 	// 	dto = playlist.PlaylistDTO{
 	// 		Id:       p.Id,

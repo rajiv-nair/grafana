@@ -25,9 +25,7 @@ type sqlStore struct {
 
 func (s *sqlStore) Insert(ctx context.Context, cmd *playlist.CreatePlaylistCommand) (*playlist.Playlist, error) {
 	p := playlist.Playlist{}
-	// here we are actually doing transaction db session, since there is one session for update 2 tables
-	var err error
-	err = s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
+	err := s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
 		uid, err := generateAndValidateNewPlaylistUid(sess, cmd.OrgId)
 		if err != nil {
 			return err
@@ -60,7 +58,6 @@ func (s *sqlStore) Insert(ctx context.Context, cmd *playlist.CreatePlaylistComma
 
 		return err
 	})
-
 	return &p, err
 }
 
@@ -82,6 +79,7 @@ func (s *sqlStore) Update(ctx context.Context, cmd *playlist.UpdatePlaylistComma
 		p.Id = existingPlaylist.Id
 
 		dto = playlist.PlaylistDTO{
+
 			Id:       p.Id,
 			UID:      p.UID,
 			OrgId:    p.OrgId,
@@ -131,6 +129,7 @@ func (s *sqlStore) Get(ctx context.Context, query *playlist.GetPlaylistByUidQuer
 		if !exists {
 			return playlist.ErrPlaylistNotFound
 		}
+
 		return err
 	})
 	return &p, err
@@ -141,7 +140,7 @@ func (s *sqlStore) Delete(ctx context.Context, cmd *playlist.DeletePlaylistComma
 		return playlist.ErrCommandValidationFailed
 	}
 
-	err := s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
+	return s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
 		playlist := playlist.Playlist{UID: cmd.UID, OrgId: cmd.OrgId}
 		_, err := sess.Get(&playlist)
 		if err != nil {
@@ -159,7 +158,6 @@ func (s *sqlStore) Delete(ctx context.Context, cmd *playlist.DeletePlaylistComma
 
 		return err
 	})
-	return err
 }
 
 func (s *sqlStore) List(ctx context.Context, query *playlist.GetPlaylistsQuery) (playlist.Playlists, error) {
@@ -180,7 +178,6 @@ func (s *sqlStore) List(ctx context.Context, query *playlist.GetPlaylistsQuery) 
 
 		return err
 	})
-
 	return playlists, err
 }
 
@@ -189,7 +186,6 @@ func (s *sqlStore) GetItems(ctx context.Context, query *playlist.GetPlaylistItem
 	if query.PlaylistUID == "" || query.OrgId == 0 {
 		return playlistItems, models.ErrCommandValidationFailed
 	}
-
 	err := s.db.WithDbSession(ctx, func(sess *sqlstore.DBSession) error {
 		// getQuery the playlist Id
 		getQuery := &playlist.GetPlaylistByUidQuery{UID: query.PlaylistUID, OrgId: query.OrgId}
@@ -197,7 +193,9 @@ func (s *sqlStore) GetItems(ctx context.Context, query *playlist.GetPlaylistItem
 		if err != nil {
 			return err
 		}
+
 		err = sess.Where("playlist_id=?", p.Id).Find(&playlistItems)
+
 		return err
 	})
 	return playlistItems, err
