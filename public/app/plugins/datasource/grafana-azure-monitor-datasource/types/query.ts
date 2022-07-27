@@ -7,6 +7,11 @@ export enum AzureQueryType {
   LogAnalytics = 'Azure Log Analytics',
   AzureResourceGraph = 'Azure Resource Graph',
   SubscriptionsQuery = 'Azure Subscriptions',
+  ResourceGroupsQuery = 'Azure Resource Groups',
+  NamespacesQuery = 'Azure Namespaces',
+  ResourceNamesQuery = 'Azure Resource Names',
+  MetricNamesQuery = 'Azure Metric Names',
+  WorkspacesQuery = 'Azure Workspaces',
   /** Deprecated */
   GrafanaTemplateVariableFn = 'Grafana Template Variable Function',
 }
@@ -27,6 +32,11 @@ export interface AzureMonitorQuery extends DataQuery {
   azureLogAnalytics?: AzureLogsQuery;
   azureResourceGraph?: AzureResourceGraphQuery;
   grafanaTemplateVariableFn?: GrafanaTemplateVariableQuery;
+
+  /** Template variables params */
+  resourceGroup?: string;
+  namespace?: string;
+  resource?: string;
 }
 
 /**
@@ -36,10 +46,8 @@ export interface AzureMetricQuery {
   resourceUri?: string;
   resourceGroup?: string;
 
-  /** Resource type */
-  metricDefinition?: string;
-
   resourceName?: string;
+  /** Resource type */
   metricNamespace?: string;
   metricName?: string;
   timeGrain?: string;
@@ -57,6 +65,9 @@ export interface AzureMetricQuery {
 
   /** @deprecated This property was migrated to dimensionFilters and should only be accessed in the migration */
   dimensionFilter?: string;
+
+  /** @deprecated Use metricNamespace instead */
+  metricDefinition?: string;
 }
 
 /**
