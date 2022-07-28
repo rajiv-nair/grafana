@@ -1,5 +1,5 @@
 import React from 'react';
-import { gte, lt, valid } from 'semver';
+import { gte, valid } from 'semver';
 
 import { DataSourceSettings, SelectableValue } from '@grafana/data';
 import { FieldSet, InlineField, Input, Select, InlineSwitch } from '@grafana/ui';
@@ -82,8 +82,7 @@ export const ElasticDetails = ({ value, onChange }: Props) => {
             options={[customOption, ...esVersions].filter(isTruthy)}
             onChange={(option) => {
               const maxConcurrentShardRequests = getMaxConcurrenShardRequestOrDefault(
-                value.jsonData.maxConcurrentShardRequests,
-                option.value!
+                value.jsonData.maxConcurrentShardRequests
               );
               onChange({
                 ...value,
@@ -224,18 +223,14 @@ const intervalHandler =
     }
   };
 
-function getMaxConcurrenShardRequestOrDefault(maxConcurrentShardRequests: number | undefined, version: string): number {
-  if (maxConcurrentShardRequests === 5 && lt(version, '7.0.0')) {
-    return 256;
-  }
-
-  if (maxConcurrentShardRequests === 256 && gte(version, '7.0.0')) {
+function getMaxConcurrenShardRequestOrDefault(maxConcurrentShardRequests: number | undefined): number {
+  if (maxConcurrentShardRequests === 256) {
     return 5;
   }
 
-  return maxConcurrentShardRequests || defaultMaxConcurrentShardRequests(version);
+  return maxConcurrentShardRequests || defaultMaxConcurrentShardRequests();
 }
 
-export function defaultMaxConcurrentShardRequests(version: string) {
-  return gte(version, '7.0.0') ? 5 : 256;
+export function defaultMaxConcurrentShardRequests() {
+  return 5;
 }
