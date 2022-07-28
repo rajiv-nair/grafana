@@ -20,6 +20,7 @@ export enum FormatRegistryID {
   lucene = 'lucene',
   raw = 'raw',
   regex = 'regex',
+  regexEncoded = 'regexencoded',
   pipe = 'pipe',
   distributed = 'distributed',
   csv = 'csv',
@@ -77,6 +78,22 @@ export const formatRegistry = new Registry<FormatRegistryItem>(() => {
           return escapedValues[0];
         }
         return '(' + escapedValues.join('|') + ')';
+      },
+    },
+        {
+      id: FormatRegistryID.regexEncoded,
+      name: 'RegexEncoded',
+      description: 'Values are regex escaped and URL encoded, and multi-valued variables generate a (<value>|<value>) expression',
+      formatter: ({ value }) => {
+        if (typeof value === 'string') {
+          return encodeURIComponentStrict(kbn.regexEscape(value));
+        }
+
+        const escapedValues = map(value, kbn.regexEscape);
+        if (escapedValues.length === 1) {
+          return escapedValues[0];
+        }
+        return encodeURIComponentStrict('(' + escapedValues.join('|') + ')');
       },
     },
     {
