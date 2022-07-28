@@ -84,51 +84,38 @@ func (s *sqlxStore) Update(ctx context.Context, cmd *playlist.UpdatePlaylistComm
 	}
 	defer tx.Rollback()
 
-	_, err = tx.NamedExecContext(ctx, s.sqlxdb.Rebind(`UPDATE playlist (playlist_id, type, value, title, order)
-	VALUES (:playlist_id, :type, :value, :title, :order)`), p)
+	_, err = tx.NamedExecContext(ctx,
+		s.sqlxdb.Rebind(`UPDATE playlist SET uid=:uid, org_id=:org_id, name=:name, interval=:interval) WHERE id=:id`), p)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err = tx.ExecContext(ctx, s.sqlxdb.Rebind("DELETE FROM playlist_item WHERE playlist_id = ?"), p.Id); err != nil {
+		return nil, err
+	}
+
+	playlistItems := make([]models.PlaylistItem, 0)
+
+	for index, item := range cmd.Items {
+		playlistItems = append(playlistItems, models.PlaylistItem{
+			PlaylistId: p.Id,
+			Type:       item.Type,
+			Value:      item.Value,
+			Order:      index + 1,
+			Title:      item.Title,
+		})
+	}
+
+	_, err = tx.NamedExecContext(ctx, s.sqlxdb.Rebind(`INSERT INTO playlist_item (playlist_id, type, value, title, order)
+	VALUES (:playlist_id, :type, :value, :title, :order)`), playlistItems)
+	if err != nil {
+		return nil, err
+	}
 
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 
-	// To be implemented
-	// err := s.db.WithTransactionalDbSession(ctx, func(sess *sqlstore.DBSession) error {
-
-	// 	dto = playlist.PlaylistDTO{
-	// 		Id:       p.Id,
-	// 		UID:      p.UID,
-	// 		OrgId:    p.OrgId,
-	// 		Name:     p.Name,
-	// 		Interval: p.Interval,
-	// 	}
-
-	// 	_, err = sess.Where("id=?", p.Id).Cols("name", "interval").Update(&p)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-
-	// 	rawSQL := "DELETE FROM playlist_item WHERE playlist_id = ?"
-	// 	_, err = sess.Exec(rawSQL, p.Id)
-
-	// 	if err != nil {
-	// 		return err
-	// 	}
-
-	// 	playlistItems := make([]models.PlaylistItem, 0)
-
-	// 	for index, item := range cmd.Items {
-	// 		playlistItems = append(playlistItems, models.PlaylistItem{
-	// 			PlaylistId: p.Id,
-	// 			Type:       item.Type,
-	// 			Value:      item.Value,
-	// 			Order:      index + 1,
-	// 			Title:      item.Title,
-	// 		})
-	// 	}
-
-	// 	_, err = sess.Insert(&playlistItems)
-	// 	return err
-	// })
 	return &dto, err
 }
 
